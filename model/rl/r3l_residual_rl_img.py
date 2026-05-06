@@ -1,14 +1,14 @@
-"""
-R3L-aligned residual RL model for image Robomimic post-training.
+"""R3L-aligned residual head for DICE-RL image Robomimic post-training.
 
-This keeps the DICE-RL frozen image flow/diffusion policy interface, but changes
-the online residual layer to match the QC-R3L training recipe:
-  - frozen base policy plus bounded residual correction
-  - query-chunk reward/discount semantics
-  - conservative best-of-N q-chunk action selection after warmup
+The rest of the training stack deliberately stays on the DICE-RL path
+(RLPD, replay, n-step returns, TD target, optimizer scheduling).  This module
+only changes the residual policy surface:
+  - frozen base policy plus smooth bounded residual correction
+  - optional final action clipping to the normalized action range
+  - delayed best-of-N q-chunk action selection using the current critic
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -20,7 +20,9 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
         self,
         *args,
         max_correction: float = 0.15,
-        r3l_query_discount_steps: int = 1,
+        clip_final_action: bool = True,
+        action_clip_min: float = -1.0,
+        action_clip_max: float = 1.0,
         q_chunk_num_samples: int = 4,
         q_chunk_critic_reduction: str = "min",
         q_chunk_warmup_steps: int = 50000,
@@ -28,7 +30,9 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
     ):
         super().__init__(*args, **kwargs)
         self.max_correction = max_correction
-        self.r3l_query_discount_steps = r3l_query_discount_steps
+        self.clip_final_action = clip_final_action
+        self.action_clip_min = action_clip_min
+        self.action_clip_max = action_clip_max
         self.q_chunk_num_samples = q_chunk_num_samples
         self.q_chunk_critic_reduction = q_chunk_critic_reduction
         self.q_chunk_warmup_steps = q_chunk_warmup_steps
@@ -47,16 +51,18 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
             pretrained_actions = output.trajectories.detach()
 
         if self.condition_residual_on_base_action:
-            residual_actions = self.actor(state, pretrained_actions)
+            raw_residual_actions = self.actor(state, pretrained_actions)
         else:
-            residual_actions = self.actor(state, noise)
+            raw_residual_actions = self.actor(state, noise)
 
-        residual_actions = torch.clamp(
-            residual_actions,
-            min=-self.max_correction,
-            max=self.max_correction,
-        )
+        residual_actions = torch.tanh(raw_residual_actions) * self.max_correction
         total_actions = pretrained_actions + residual_actions
+        if self.clip_final_action:
+            total_actions = torch.clamp(
+                total_actions,
+                min=self.action_clip_min,
+                max=self.action_clip_max,
+            )
 
         if return_pretrained_actions:
             return total_actions, pretrained_actions
@@ -138,87 +144,3 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
             )
 
         return selected_actions, selected_noise
-
-    def loss(
-        self,
-        state: torch.Tensor,
-        noise: torch.Tensor,
-        action: torch.Tensor,
-        next_state: torch.Tensor,
-        reward: torch.Tensor,
-        done: torch.Tensor,
-        gamma: float = 0.99,
-        training_step: int = 0,
-        q_overestimation: Optional[torch.Tensor] = None,
-        n_steps: Optional[torch.Tensor] = None,
-        data_source: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> Dict[str, torch.Tensor]:
-        batch_size = state.shape[0]
-        current_actions = self.get_action(state, noise)
-        q_values = self.critic(state, noise, current_actions)
-
-        with torch.no_grad():
-            if not self.multi_sample_next_noise:
-                next_noise = torch.randn(
-                    batch_size,
-                    action.shape[1],
-                    self.action_dim,
-                    device=self.device,
-                )
-                next_actions = self.get_action(next_state, next_noise)
-                target_next_q = self.target_critic(next_state, next_noise, next_actions)
-            else:
-                k = self.num_next_noise_samples
-                next_noise_samples = torch.randn(
-                    k,
-                    batch_size,
-                    action.shape[1],
-                    self.action_dim,
-                    device=self.device,
-                )
-                next_state_rep = (
-                    next_state.unsqueeze(0)
-                    .expand(k, -1, -1, -1)
-                    .reshape(k * batch_size, *next_state.shape[1:])
-                )
-                next_noise = next_noise_samples.reshape(
-                    k * batch_size,
-                    *next_noise_samples.shape[2:],
-                )
-                next_actions = self.get_action(next_state_rep, next_noise)
-                target_q_samples = self.target_critic(
-                    next_state_rep,
-                    next_noise,
-                    next_actions,
-                )
-                target_next_q = target_q_samples.reshape(k, batch_size, 1).mean(dim=0)
-
-            if n_steps is None:
-                query_steps = torch.ones_like(reward)
-            else:
-                query_steps = n_steps.float()
-            gamma_effective = gamma ** (query_steps * self.r3l_query_discount_steps)
-            target_q = reward + gamma_effective * (1 - done.float()) * target_next_q
-
-        actor_losses = self.actor_loss(
-            state,
-            noise,
-            current_actions,
-            q_values,
-            next_state,
-            None,
-            training_step,
-            q_overestimation,
-            data_source=data_source,
-        )
-        critic_losses = self.critic_loss(state, noise, action, target_q, data_source=data_source)
-
-        total_loss = actor_losses["actor_total"] + self.critic_weight * critic_losses["critic_loss"]
-        return {
-            "total_loss": total_loss,
-            "r3l/query_discount_mean": gamma_effective.mean(),
-            "r3l/max_correction": torch.tensor(self.max_correction, device=self.device),
-            **actor_losses,
-            **critic_losses,
-        }

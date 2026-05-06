@@ -1,15 +1,13 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-# Run R3L-style residual post-training on Robomimic image tasks.
-#
+# Run DICE-RL post-training on Robomimic image tasks.
 # Usage:
-#   zsh train_script/run_r3l_robomimic_post_training.zsh
-#   zsh train_script/run_r3l_robomimic_post_training.zsh square device=cuda:1 seed=0
-#   DRY_RUN=1 zsh train_script/run_r3l_robomimic_post_training.zsh transport
+#   zsh train_script/run_dice_rl_robomimic_post_training.zsh
+#   zsh train_script/run_dice_rl_robomimic_post_training.zsh square device=cuda:1 seed=0
+#   DRY_RUN=1 zsh train_script/run_dice_rl_robomimic_post_training.zsh transport
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="${DICE_RL_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+ROOT_DIR="${DICE_RL_ROOT:-/home/wenkai001/ssd/ziming/dice-rl}"
 cd "${ROOT_DIR}"
 
 export DICE_RL_DATA_DIR="${DICE_RL_DATA_DIR:-${ROOT_DIR}/data_dir}"
@@ -60,11 +58,6 @@ data_dir_name=(
   transport  "transport-img"
 )
 
-max_correction="${R3L_MAX_CORRECTION:-0.15}"
-l2_penalty_coeff="${R3L_L2_PENALTY_COEFF:-0.3}"
-q_chunk_num_samples="${R3L_Q_CHUNK_NUM_SAMPLES:-4}"
-q_chunk_warmup_steps="${R3L_Q_CHUNK_WARMUP_STEPS:-50000}"
-
 for task in "${selected_tasks[@]}"; do
   config_dir="${ROOT_DIR}/cfg/robomimic/finetune/${task}"
   config_name="ft_distill_residual_flow_unet_img"
@@ -72,23 +65,21 @@ for task in "${selected_tasks[@]}"; do
   normalization_path="${task_data_dir}/ph_pretrain/normalization.npz"
   dataset_path="${task_data_dir}/ph_finetune/train.npz"
 
-  if [[ "${DRY_RUN:-0}" != "1" ]]; then
-    if [[ ! -f "${config_dir}/${config_name}.yaml" ]]; then
-      print -u2 "Missing config: ${config_dir}/${config_name}.yaml"
-      exit 1
-    fi
-    if [[ ! -f "${ckpt_path[$task]}" ]]; then
-      print -u2 "Missing pretrained checkpoint for ${task}: ${ckpt_path[$task]}"
-      exit 1
-    fi
-    if [[ ! -f "${normalization_path}" ]]; then
-      print -u2 "Missing normalization file for ${task}: ${normalization_path}"
-      exit 1
-    fi
-    if [[ ! -f "${dataset_path}" ]]; then
-      print -u2 "Missing finetune dataset for ${task}: ${dataset_path}"
-      exit 1
-    fi
+  if [[ ! -f "${config_dir}/${config_name}.yaml" ]]; then
+    print -u2 "Missing config: ${config_dir}/${config_name}.yaml"
+    exit 1
+  fi
+  if [[ ! -f "${ckpt_path[$task]}" ]]; then
+    print -u2 "Missing pretrained checkpoint for ${task}: ${ckpt_path[$task]}"
+    exit 1
+  fi
+  if [[ ! -f "${normalization_path}" ]]; then
+    print -u2 "Missing normalization file for ${task}: ${normalization_path}"
+    exit 1
+  fi
+  if [[ ! -f "${dataset_path}" ]]; then
+    print -u2 "Missing finetune dataset for ${task}: ${dataset_path}"
+    exit 1
   fi
 
   cmd=(
@@ -98,23 +89,11 @@ for task in "${selected_tasks[@]}"; do
     "base_policy_path=${ckpt_path[$task]}"
     "normalization_path=${normalization_path}"
     "expert_dataset.dataset_path=${dataset_path}"
-    "wandb.project=robomimic-${task}-r3l-post-training-img"
-    "name=${task}_r3l_residual_flow_unet_img"
-    "_target_=agent.finetune.train_distill_residual_flow_img_agent.TrainDistillResidualFlowImgAgent"
-    "model._target_=model.rl.r3l_residual_rl_img.R3LResidualRLImgModel"
-    "model.max_correction=${max_correction}"
-    "model.clip_final_action=true"
-    "model.bc_loss_weight=${l2_penalty_coeff}"
-    "model.q_chunk_num_samples=${q_chunk_num_samples}"
-    "model.q_chunk_critic_reduction=min"
-    "model.q_chunk_warmup_steps=${q_chunk_warmup_steps}"
-    "online_explore_strategy=r3l_q_chunk"
-    "evaluate_strategy=r3l_q_chunk"
-    "num_exploration_samples=${q_chunk_num_samples}"
+    "wandb.project=robomimic-${task}-dice-rl-post-training-img"
     "${hydra_overrides[@]}"
   )
 
-  print "\n[R3L] ${task}"
+  print "\n[DICE-RL] ${task}"
   print -r -- "${cmd[@]}"
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
     "${cmd[@]}"
