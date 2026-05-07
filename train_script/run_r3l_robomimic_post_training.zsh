@@ -12,8 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="${DICE_RL_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 cd "${ROOT_DIR}"
 
-export DICE_RL_DATA_DIR="${DICE_RL_DATA_DIR:-${ROOT_DIR}/data_dir}"
+DICE_RL_ASSET_ROOT="${DICE_RL_ASSET_ROOT:-/home/wenkai001/ssd/ziming/dice-rl}"
+export DICE_RL_DATA_DIR="${DICE_RL_DATA_DIR:-${DICE_RL_ASSET_ROOT}/data_dir}"
 export DICE_RL_LOG_DIR="${DICE_RL_LOG_DIR:-${ROOT_DIR}/log_dir}"
+DICE_RL_CKPT_LOG_DIR="${DICE_RL_CKPT_LOG_DIR:-${DICE_RL_ASSET_ROOT}/log_dir}"
 export PYTHONPATH="${ROOT_DIR}:${PYTHONPATH:-}"
 export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
@@ -48,11 +50,25 @@ if ((${#selected_tasks[@]} == 0)); then
   selected_tasks=("${default_tasks[@]}")
 fi
 
+if [[ "${R3L_REMAP_CUDA_VISIBLE_DEVICES:-1}" == "1" && -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  for i in {1..${#hydra_overrides[@]}}; do
+    if [[ "${hydra_overrides[$i]}" == device=cuda:<-> ]]; then
+      gpu_id="${hydra_overrides[$i]#device=cuda:}"
+      export CUDA_VISIBLE_DEVICES="${gpu_id}"
+      export EGL_DEVICE_ID=0
+      export MUJOCO_EGL_DEVICE_ID=0
+      hydra_overrides[$i]="device=cuda:0"
+      print "[R3L] Remapped physical GPU ${gpu_id} via CUDA_VISIBLE_DEVICES; Hydra device=cuda:0; MUJOCO_EGL_DEVICE_ID=0"
+      break
+    fi
+  done
+fi
+
 typeset -A ckpt_path data_dir_name
 ckpt_path=(
-  square     "${ROOT_DIR}/log_dir/robomimic-pretrain/pretrained_bc_policy_square_img/checkpoint/state_2000.pt"
-  tool_hang  "${ROOT_DIR}/log_dir/robomimic-pretrain/tool_hang_img/checkpoint/state_1400.pt"
-  transport  "${ROOT_DIR}/log_dir/robomimic-pretrain/transport_img/checkpoint/state_2400.pt"
+  square     "${DICE_RL_CKPT_LOG_DIR}/robomimic-pretrain/pretrained_bc_policy_square_img/checkpoint/state_2000.pt"
+  tool_hang  "${DICE_RL_CKPT_LOG_DIR}/robomimic-pretrain/tool_hang_img/checkpoint/state_1400.pt"
+  transport  "${DICE_RL_CKPT_LOG_DIR}/robomimic-pretrain/transport_img/checkpoint/state_2400.pt"
 )
 data_dir_name=(
   square     "square-img"
@@ -102,15 +118,15 @@ for task in "${selected_tasks[@]}"; do
     "name=${task}_r3l_residual_flow_unet_img"
     "_target_=agent.finetune.train_distill_residual_flow_img_agent.TrainDistillResidualFlowImgAgent"
     "model._target_=model.rl.r3l_residual_rl_img.R3LResidualRLImgModel"
-    "model.max_correction=${max_correction}"
-    "model.clip_final_action=true"
-    "model.bc_loss_weight=${l2_penalty_coeff}"
-    "model.q_chunk_num_samples=${q_chunk_num_samples}"
-    "model.q_chunk_critic_reduction=min"
-    "model.q_chunk_warmup_steps=${q_chunk_warmup_steps}"
-    "online_explore_strategy=r3l_q_chunk"
-    "evaluate_strategy=r3l_q_chunk"
-    "num_exploration_samples=${q_chunk_num_samples}"
+    "++model.max_correction=${max_correction}"
+    "++model.clip_final_action=true"
+    "++model.bc_loss_weight=${l2_penalty_coeff}"
+    "++model.q_chunk_num_samples=${q_chunk_num_samples}"
+    "++model.q_chunk_critic_reduction=min"
+    "++model.q_chunk_warmup_steps=${q_chunk_warmup_steps}"
+    "++online_explore_strategy=r3l_q_chunk"
+    "++evaluate_strategy=r3l_q_chunk"
+    "++num_exploration_samples=${q_chunk_num_samples}"
     "${hydra_overrides[@]}"
   )
 

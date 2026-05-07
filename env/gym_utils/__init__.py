@@ -217,12 +217,10 @@ def make_async(
             ObsUtils.initialize_obs_modality_mapping_from_dict(obs_modality_dict)
             os.environ["MUJOCO_GL"] = "egl"
             if render_offscreen or use_image_obs:
-                # Ensure EGL uses the correct GPU device
-                if "CUDA_VISIBLE_DEVICES" in os.environ:
-                    # Map CUDA device to EGL device
-                    cuda_device = os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]
-                    os.environ["EGL_DEVICE_ID"] = cuda_device
-                    os.environ["MUJOCO_EGL_DEVICE_ID"] = cuda_device
+                if "MUJOCO_EGL_DEVICE_ID" not in os.environ and "CUDA_VISIBLE_DEVICES" in os.environ:
+                    os.environ["MUJOCO_EGL_DEVICE_ID"] = os.environ["CUDA_VISIBLE_DEVICES"].split(",")[0]
+                if "MUJOCO_EGL_DEVICE_ID" in os.environ:
+                    os.environ["EGL_DEVICE_ID"] = os.environ["MUJOCO_EGL_DEVICE_ID"]
             with open(robomimic_env_cfg_path, "r") as f:
                 env_meta = json.load(f)
             env_meta["reward_shaping"] = reward_shaping

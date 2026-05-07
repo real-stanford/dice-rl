@@ -411,6 +411,8 @@ class DistillResidualRLModel(nn.Module):
         # Instantiate the model using the processed config
         pretrained_model = hydra.utils.instantiate(pretrained_cfg.model)
         pretrained_model.to(device)
+        if hasattr(pretrained_model, "device"):
+            pretrained_model.device = device
         
         # Load the checkpoint
         log.info(f"Loading pretrained policy weights from: {checkpoint_path}")
@@ -485,6 +487,8 @@ class DistillResidualRLModel(nn.Module):
         
         # Move model to device again after loading state dict to ensure all components are on correct device
         pretrained_model.to(device)
+        if hasattr(pretrained_model, "device"):
+            pretrained_model.device = device
         
         # Ensure all buffers are also moved to device
         for buffer in pretrained_model.buffers():
