@@ -11,6 +11,7 @@ only changes the residual policy surface:
 from typing import Tuple
 
 import torch
+import torch.nn.functional as F
 
 from model.rl.distill_residual_rl_img import DistillResidualRLImgModel
 
@@ -26,6 +27,9 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
         q_chunk_num_samples: int = 4,
         q_chunk_critic_reduction: str = "min",
         q_chunk_warmup_steps: int = 50000,
+        residual_squash: str = "tanh",
+        max_correction_init: float = None,
+        max_correction_warmup_steps: int = 0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -36,6 +40,36 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
         self.q_chunk_num_samples = q_chunk_num_samples
         self.q_chunk_critic_reduction = q_chunk_critic_reduction
         self.q_chunk_warmup_steps = q_chunk_warmup_steps
+
+        if residual_squash not in ("tanh", "softsign"):
+            raise ValueError(f"Unknown residual_squash: {residual_squash}")
+        self.residual_squash = residual_squash
+
+        self.max_correction_init = (
+            max_correction if max_correction_init is None else max_correction_init
+        )
+        self.max_correction_warmup_steps = max_correction_warmup_steps
+
+        # Tracks current optimization step so get_action can read the annealed
+        # max_correction value without changing call signatures everywhere.
+        self._current_step = 0
+
+    def _squash(self, raw: torch.Tensor) -> torch.Tensor:
+        if self.residual_squash == "softsign":
+            return F.softsign(raw)
+        return torch.tanh(raw)
+
+    def _effective_max_correction(self) -> float:
+        if self.max_correction_warmup_steps <= 0:
+            return self.max_correction
+        frac = min(1.0, max(0.0, float(self._current_step) / float(self.max_correction_warmup_steps)))
+        return self.max_correction_init + (self.max_correction - self.max_correction_init) * frac
+
+    def loss(self, *args, **kwargs):
+        # Capture the current optimization step so get_action can use it for
+        # max_correction annealing.
+        self._current_step = int(kwargs.get("training_step", 0))
+        return super().loss(*args, **kwargs)
 
     def get_action(
         self,
@@ -55,7 +89,8 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
         else:
             raw_residual_actions = self.actor(state, noise)
 
-        residual_actions = torch.tanh(raw_residual_actions) * self.max_correction
+        cur_max_correction = self._effective_max_correction()
+        residual_actions = self._squash(raw_residual_actions) * cur_max_correction
         total_actions = pretrained_actions + residual_actions
         if self.clip_final_action:
             total_actions = torch.clamp(
@@ -77,6 +112,9 @@ class R3LResidualRLImgModel(DistillResidualRLImgModel):
         replay_flow_model=None,
         replay_flow_config=None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Keep schedule consistent during environment rollouts as well.
+        self._current_step = int(training_step)
+
         if exploration_strategy != "r3l_q_chunk":
             return super().get_exploration_action(
                 state=state,

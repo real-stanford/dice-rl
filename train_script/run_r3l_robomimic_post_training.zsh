@@ -77,9 +77,24 @@ data_dir_name=(
 )
 
 max_correction="${R3L_MAX_CORRECTION:-0.15}"
-l2_penalty_coeff="${R3L_L2_PENALTY_COEFF:-0.3}"
-q_chunk_num_samples="${R3L_Q_CHUNK_NUM_SAMPLES:-4}"
-q_chunk_warmup_steps="${R3L_Q_CHUNK_WARMUP_STEPS:-50000}"
+# Calibrated for the bounded residual: with tanh/softsign * 0.15 the worst-case
+# ||residual||^2 ~= max_correction^2 = 0.0225, so a coefficient ~ O(20) gives a
+# saturated-residual penalty of ~0.45, comparable in scale to the normalized
+# Q-loss (~O(1)) and prevents the actor from drifting into saturation.
+l2_penalty_coeff="${R3L_L2_PENALTY_COEFF:-20.0}"
+q_chunk_num_samples="${R3L_Q_CHUNK_NUM_SAMPLES:-16}"
+q_chunk_warmup_steps="${R3L_Q_CHUNK_WARMUP_STEPS:-10000}"
+residual_squash="${R3L_RESIDUAL_SQUASH:-softsign}"
+zero_init_final="${R3L_ZERO_INIT_FINAL:-true}"
+max_correction_init="${R3L_MAX_CORRECTION_INIT:-0.03}"
+max_correction_warmup_steps="${R3L_MAX_CORRECTION_WARMUP:-30000}"
+critic_only_warmup_steps="${R3L_CRITIC_ONLY_WARMUP:-5000}"
+use_soft_q_filtering="${R3L_USE_SOFT_Q_FILTERING:-true}"
+# Threshold for q_overestimation < threshold to count as underestimated.
+# A large positive value makes the underestimation gate always-on, so soft
+# Q-filtering reduces to "drop BC penalty whenever the residual policy beats
+# the pretrained policy in Q" (i.e. self-imitation on better samples).
+q_underestimation_threshold="${R3L_Q_UNDERESTIMATION_THRESHOLD:-1000000.0}"
 
 for task in "${selected_tasks[@]}"; do
   config_dir="${ROOT_DIR}/cfg/robomimic/finetune/${task}"
@@ -124,6 +139,13 @@ for task in "${selected_tasks[@]}"; do
     "++model.q_chunk_num_samples=${q_chunk_num_samples}"
     "++model.q_chunk_critic_reduction=min"
     "++model.q_chunk_warmup_steps=${q_chunk_warmup_steps}"
+    "++model.residual_squash=${residual_squash}"
+    "++model.zero_init_final=${zero_init_final}"
+    "++model.max_correction_init=${max_correction_init}"
+    "++model.max_correction_warmup_steps=${max_correction_warmup_steps}"
+    "++model.use_soft_q_filtering=${use_soft_q_filtering}"
+    "++model.q_underestimation_threshold=${q_underestimation_threshold}"
+    "++train.critic_only_warmup_steps=${critic_only_warmup_steps}"
     "++online_explore_strategy=r3l_q_chunk"
     "++evaluate_strategy=r3l_q_chunk"
     "++num_exploration_samples=${q_chunk_num_samples}"

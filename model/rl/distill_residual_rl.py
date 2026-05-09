@@ -37,29 +37,38 @@ class DistilledActor(nn.Module):
         hidden_dims: List[int] = [256, 256, 256],
         activation_type: str = "Mish",
         use_layernorm: bool = False,
+        zero_init_final: bool = False,
         **kwargs
     ):
         super().__init__()
-        
+
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.cond_steps = cond_steps
         self.horizon_steps = horizon_steps
-        
+
         # Input: flattened state + noise
         # state: (B, cond_steps, obs_dim) -> flattened to (B, cond_steps * obs_dim)
         # noise: (B, horizon_steps, action_dim) -> flattened to (B, horizon_steps * action_dim)
         input_dim = cond_steps * obs_dim + horizon_steps * action_dim
         output_dim = horizon_steps * action_dim
-        
+
         mlp_dims = [input_dim] + hidden_dims + [output_dim]
-        
+
         self.mlp = MLP(
             mlp_dims,
             activation_type=activation_type,
             out_activation_type="Identity",
             use_layernorm=use_layernorm,
         )
+
+        if zero_init_final:
+            # Anchor residual at 0 so total_action == pretrained_action at step 0.
+            final_module = self.mlp.moduleList[-1]
+            final_linear = final_module.linear_1
+            nn.init.zeros_(final_linear.weight)
+            if final_linear.bias is not None:
+                nn.init.zeros_(final_linear.bias)
     
     def forward(self, state: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         """

@@ -55,6 +55,10 @@ class TrainDistillResidualFlowAgent(TrainAgent):
         # Delayed update frequencies (like CURL/SAC)
         self.actor_update_freq = cfg.train.get("actor_update_freq", 1)  # Update actor every N steps
         self.critic_target_update_freq = cfg.train.get("critic_target_update_freq", 1)  # Update target every N steps
+        # Critic-only warmup: skip actor optimizer.step for the first N gradient
+        # steps so the critic establishes a usable signal before the actor sees
+        # gradient updates. Actor backward still runs to release the graph.
+        self.critic_only_warmup_steps = cfg.train.get("critic_only_warmup_steps", 0)
 
         # Optimizers
         # Create base Adam optimizer first
@@ -351,11 +355,13 @@ class TrainDistillResidualFlowAgent(TrainAgent):
                 'q_analysis/offline_reward': offline_reward.item() if torch.is_tensor(offline_reward) else offline_reward,
             })
         
-        # Update actor (with delayed updates)
-        if (training_step+1) % self.actor_update_freq == 0:
+        # Update actor (with delayed updates and optional critic-only warmup)
+        in_critic_only_warmup = training_step < self.critic_only_warmup_steps
+        actor_step_due = (training_step + 1) % self.actor_update_freq == 0
+        if actor_step_due and not in_critic_only_warmup:
             self.actor_optimizer.zero_grad()
             loss_dict['actor_total'].backward()
-            
+
             # Compute actor gradient norm before clipping
             actor_grad_norm = 0.0
             for param in self.model.actor.parameters():
@@ -363,14 +369,18 @@ class TrainDistillResidualFlowAgent(TrainAgent):
                     actor_grad_norm += param.grad.data.norm(2).item() ** 2
             actor_grad_norm = actor_grad_norm ** 0.5
             loss_dict['actor_grad_norm'] = actor_grad_norm
-            
+
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.actor.parameters(), self.max_grad_norm)
             self.actor_optimizer.step()
-            
+
         else:
-            # Clean up computation graph even if actor not updated
+            # Clean up computation graph even if actor not updated.
+            # During critic-only warmup we additionally clear any accumulated
+            # actor grads so they don't trigger the first post-warmup step.
             loss_dict['actor_total'].backward()
+            if in_critic_only_warmup:
+                self.actor_optimizer.zero_grad()
             loss_dict['actor_grad_norm'] = 0.0  # No gradient computed
             
         # Update critic (always update)
@@ -393,16 +403,17 @@ class TrainDistillResidualFlowAgent(TrainAgent):
         if (training_step+1) % self.critic_target_update_freq == 0:
             self.model.update_target_networks(tau=self.tau)
         
-        # Update learning rate schedulers (only when actor updates)
-        if (training_step+1) % self.actor_update_freq == 0:
+        # Update learning rate schedulers (only when actor updates and not in critic-only warmup)
+        if actor_step_due and not in_critic_only_warmup:
             if self.actor_scheduler is not None:
                 self.actor_scheduler.step()
         if self.critic_scheduler is not None:
             self.critic_scheduler.step()
-        
+
         # Add update frequency metrics to loss_dict for logging
-        loss_dict['actor_updated'] = float(training_step % self.actor_update_freq == 0)
+        loss_dict['actor_updated'] = float(actor_step_due and not in_critic_only_warmup)
         loss_dict['target_updated'] = float(training_step % self.critic_target_update_freq == 0)
+        loss_dict['critic_only_warmup'] = float(in_critic_only_warmup)
 
         return loss_dict, current_expert_ratio
     
