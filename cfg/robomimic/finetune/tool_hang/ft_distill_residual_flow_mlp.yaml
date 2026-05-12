@@ -147,7 +147,7 @@ model:
   use_soft_q_filtering: false  # Use soft Q-filtering
   q_filtering_warmup_steps: 5000
   q_underestimation_threshold: -0.55 # Threshold for Q underestimation detection
-  replay_flow_warmup_steps: 1000
+  replay_flow_warmup_steps: 4000
   # q normalization
   use_q_normalization: true # this has to be true
   # Disable Q loss for expert data samples (ablation study)
