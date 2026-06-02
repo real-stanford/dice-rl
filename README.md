@@ -1,4 +1,5 @@
 # From Prior to Pro: Efficient Skill Mastery via Distribution Contractive RL Finetuning (DICE-RL)
+ICML 2026
 
 [[Paper](https://arxiv.org/abs/2603.10263)]&nbsp;&nbsp;[[Website](https://zhanyisun.github.io/dice.rl.2026/)]&nbsp;&nbsp;[[Datasets](https://huggingface.co/datasets/wintermelontree/robomimic-pretrain-data)]&nbsp;&nbsp;[[Checkpoints](https://huggingface.co/wintermelontree/robomimic-pretrain-checkpoints)]&nbsp;&nbsp;[[Real Robot Code](https://github.com/zhanyisun/DICE-RL-Robot)]
 
