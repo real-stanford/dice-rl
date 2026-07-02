@@ -165,6 +165,7 @@ model:
   # Loss coefficients - bc_loss_weight used for residual regularization
   bc_loss_weight: 50.0  # Used for ||r_θ(s,z)||² regularization in residual RL
   critic_weight: 1.0
+  use_soft_q_filtering: false
   q_filtering_warmup_steps: 2000
   q_underestimation_threshold: -0.5  # Threshold for Q underestimation detection
   replay_flow_warmup_steps: 3000
